@@ -1,0 +1,474 @@
+---
+title: "Predicting Happiness Scores for Countries"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+Purpose: To determine which countries will have the top 5 happiness scores and which ones will have the bottom 5 happiness scores. 
+
+Setting up environment and load data
+```{r}
+library(forecast)
+whi.df <- read.csv("Team8_Report_Data1.csv", header=TRUE)
+
+# Must convert Generosity rating from character to a number
+whi.df$Generosity <-as.numeric(whi.df$Generosity)
+typeof(whi.df$Generosity)
+
+
+#Cleaning process for NA values
+sum(is.na(whi.df$Generosity)) 
+which(is.na(whi.df$Generosity))
+missing = which(is.na(whi.df$Generosity))
+missing
+average = mean(whi.df$Generosity, na.rm = TRUE)
+average
+whi.df$Generosity[missing] <- average
+sum(is.na(whi.df$Generosity))
+
+#Display dataset for Logistic Regression
+whi.log.df <- whi.df
+head(whi.log.df,5)
+
+#Removal of Non-numeric columns and happiness ranking because it is strongly correlated to the happiness score
+#Dataset for Linear Regression
+whi.intonly.df <- whi.df[, -c(1,2,10)] 
+whi.intonly.df
+```
+
+##DATA VISUALIZATIONS## 
+
+Starting with a data summary: 
+
+```{r}
+head(whi.intonly.df,5)
+tail(whi.intonly.df,5)
+summary(whi.intonly.df[,-c(1)])
+data.frame(mean=sapply(whi.intonly.df, mean), 
+                         sd=sapply(whi.intonly.df, sd), 
+                         min=sapply(whi.intonly.df, min), 
+                         max=sapply(whi.intonly.df, max), 
+                         median=sapply(whi.intonly.df, median), 
+                         length=sapply(whi.intonly.df, length),
+                         miss.val=sapply(whi.intonly.df, function(x) 
+                         sum((is.na(x)))))
+```
+
+Correlation Table: 
+```{r}
+round(cor(whi.intonly.df[, -c(1)]),2) 
+```
+
+...and visualized: 
+```{r}
+# Visual of correlation
+#install.packages("ggcorrplot")
+library(ggcorrplot)
+
+whi.cor.df <- whi.intonly.df[, -c(1)] 
+whi.cor.df
+
+cor_matrix <- cor(whi.cor.df)
+ggcorrplot(cor_matrix, hc.order = TRUE, type = "lower",
+           ggtheme = ggplot2::theme_gray, colors = c("#6D9EC1", "#FFFFFF", "#E46726"),
+           lab = TRUE, lab_size = 3.5, method = "circle", legend.title = "Correlation")
+```
+Boxplot: 
+```{r}
+par(mfcol = c(1, 6)) #one row four columns
+boxplot(whi.df$GDP.per.Capita, ylab = "GDP")
+boxplot(whi.df$Family, ylab = "Family")
+boxplot(whi.df$Generosity, ylab = "Generosity")
+boxplot(whi.df$Life.Expectancy, ylab = "Life Expectancy")
+boxplot(whi.df$Freedom, ylab = "Freedom")
+boxplot(whi.df$Government.Corruption, ylab = "Government Corruption")
+```
+
+Scatterplot: 
+```{r}
+par(mfrow = c(3,2))
+par(pin=c(2,1))
+
+plot(whi.df$GDP.per.Capita, whi.df$Happiness.Score, xlab = "GDP per Capita" , ylab = "Happiness Score", )
+plot(whi.df$Life.Expectancy, whi.df$Happiness.Score, xlab = "Life Expectancy", ylab = "Happiness Score")
+plot(whi.df$Freedom, whi.df$Happiness.Score,  xlab = "Freedom", ylab = "Happiness Score")
+plot(whi.df$Government.Corruption, whi.df$Happiness.Score,  xlab = "Government Corruption", ylab = "Happiness Score")
+plot(whi.df$Family, whi.df$Happiness.Score, xlab = "Family", ylab = "Happiness Score")
+plot(whi.df$Generosity, whi.df$Happiness.Score,  xlab = "Generosity", ylab = "Happiness Score")
+```
+
+
+##LINEAR REGRESSION: 
+
+Partitioning the data: 
+```{r}
+#Setting random
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+
+#Dividing data for partition
+train_lr.rows <- sample(rownames(whi.intonly.df), dim(whi.intonly.df)[1]*0.6)
+head(train_lr.rows)
+valid_lr.rows <- setdiff(rownames(whi.intonly.df), train_lr.rows)
+head(valid_lr.rows)
+
+#Completed partition
+train_lr.df <- whi.intonly.df[train_lr.rows, ]
+valid_lr.df <- whi.intonly.df[valid_lr.rows, ]
+head(train_lr.df)
+head(valid_lr.df)
+```
+
+
+
+On the training data, we built a linear regression to predict the happiness score based on everything. 
+```{r}
+whi.lm.full <- lm(Happiness.Score ~ ., data = train_lr.df)
+summary(whi.lm.full)
+accuracy(whi.lm.full)
+```
+
+Exhaustive Search: 
+```{r}
+library(leaps)
+library(forecast)
+
+
+search <- regsubsets(Happiness.Score ~ ., data = train_lr.df, nvmax=dim(whi.intonly.df)[2], method = "exhaustive")
+sum <- summary(search)
+sum
+
+
+# Print out the adjusted R square
+sum$adjr2
+which.max(sum$adjr2)
+#Which predictors should we include?
+#Build a linear model based on these predictors
+
+whi.lm.exhausted <- lm(Happiness.Score ~ ., data = train_lr.df)
+whi.lm.exhausted.pred <- predict(whi.lm.exhausted, newdata = valid_lr.df)
+accuracy(whi.lm.exhausted.pred, valid_lr.df$Happiness.Score)
+```
+
+Backward: 
+```{r} 
+whi.lm.backward <- step(whi.lm.full, direction = "backward")
+summary(whi.lm.backward) 
+whi.lm.backward.pred <- predict(whi.lm.backward, newdata = valid_lr.df)
+library(forecast)
+accuracy(whi.lm.backward.pred, valid_lr.df$Happiness.Score)
+```
+
+Forward: 
+```{r}
+whi.lm.null <- lm(Happiness.Score~1, data = train_lr.df)
+whi.lm.forward <- step(whi.lm.null, data = train_lr.df, scope = list(lower = whi.lm.null, upper = whi.lm.full), direction = "forward")
+summary(whi.lm.forward)  # Which variables were added?
+whi.lm.forward.pred <- predict(whi.lm.forward, newdata = valid_lr.df)
+accuracy(whi.lm.forward.pred,valid_lr.df$Happiness.Score)
+```
+
+Stepwise:
+```{r}
+whi.lm.step <- step(whi.lm.full, data = train_lr.df, direction = "both")
+summary(whi.lm.step)  # Which variables were dropped/added?
+whi.lm.step.pred <- predict(whi.lm.step, newdata = valid_lr.df)
+accuracy(whi.lm.step.pred, valid_lr.df$Happiness.Score)
+```
+#PCA ANALYSIS
+
+PCA Analysis:
+```{r}
+#PCA analysis:
+pcs <- prcomp((train_lr.df), scale. = T)
+summary(pcs)
+weight <- pcs$rotation[,1:5]
+dim(weight)
+pc.scores <- pcs$x
+training.pca.df <- data.frame(train_lr.df$Happiness.Score, pc.scores)
+pca.train.model1 <- lm(train_lr.df.Happiness.Score~PC1+PC2+PC3+PC4+PC5, data =
+training.pca.df)
+coefficients <- pca.train.model1$coefficients
+coefficients
+head(coefficients)
+valid.scale <- as.data.frame(scale(valid_lr.df))
+dim(valid.scale)
+pcv <- as.matrix(valid.scale) %*% as.matrix(weight)
+head(pcv)
+pcv1 <-cbind(1,pcv)
+head(pcv1)
+pc_hat <- pcv1%*% coefficients
+head(pc_hat)
+```
+Interpretation: This PCA analysis explains that we only need five predictors to explain 95% of the variance. This would be the first five. *Go back to lecture notes to explain why it would be the first four. 
+
+Generating a forecast based on the full model: 
+```{r}
+whi.lm.full.reg <- lm(Happiness.Score~ ., data = train_lr.df)
+whi.lm.full.pred <- predict(whi.lm.full.reg, newdata = valid_lr.df)
+#whi.lm.step.pred
+library(forecast)
+accuracy(whi.lm.full.pred,valid_lr.df$Happiness.Score)
+
+```
+
+Making sense of the output by mapping country to the indexed number: 
+```{R}
+head(valid_lr.rows)
+ctry_names <- whi.df$Country[as.numeric(valid_lr.rows)]
+year <- whi.df$Year[valid_lr.rows]
+#head(whi.df$Country)
+#head(whi.df$Year)
+rankings <- data.frame(whi.lm.full.pred,ctry_names)
+ranking_year <- data.frame(whi.lm.full.pred,year)
+head(ranking_year)
+ordered <- rankings[order(rankings$whi.lm.full.pred, decreasing = TRUE), ]
+ordered_year <- ranking_year[order(ranking_year$whi.lm.full.pred, decreasing = TRUE),]
+head(ordered)
+tail(ordered)
+```
+Conclusion: Our linear regression, derived from our stepwise regression function determines GDP per capita, Freedom and Life Expectancy to be the most significant predictors for a happiness score. The model predicts that Singapore, Sweden and Australia will be the top 3 countries ranked on this index, scoring 7.36, 7.12, 7.07 respectively. Given our most significant predictors, we can deduce that these three countries all score highly in those specific predictors as they are small countries (GDP per capita will be higher than countries with larger populations), and have a free economy and political system with a welfare inspired social system, likely positivley impacting their life expectancy. Conversely, the bottom 3 countries are Benin, Burkina Faso and the Ivory Coast.
+
+```{r}
+WHI.2019 <- read.csv("Team8_Report_Data1.csv", header = TRUE)
+whi.2019 <- WHI.2019[,-c(1,2,5)]
+```
+Partition: 
+```{r}
+#Setting random
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+head(whi.2019)
+#Dividing data for partition
+train_2019.rows <- sample(rownames(whi.2019), dim(whi.2019)[1]*0.6)
+head(train_2019.rows)
+valid_2019.rows <- setdiff(rownames(whi.2019), train_2019.rows)
+head(train_2019.rows)
+
+#Completed partition
+train_2019.df <- whi.2019[train_2019.rows, ]
+valid_2019.df <- whi.2019[valid_2019.rows, ]
+```
+
+
+#Logistic Regression: 
+
+```{r}
+
+#Create dummy variable to categorize if country are happy or not
+happy <- ifelse(whi.log.df$Happiness.Score >= 6, 1, 0)
+df <- data.frame(happy = happy)
+whi.log.df$Happiness <- happy
+
+#Cleaning for logistic regression
+whi.log.df <- whi.log.df[, -c(1,2,3,10)] 
+whi.log.df
+```
+
+#Data Visual for Comparing Happy and Sad Countries
+```{r}
+par(mfcol = c(1, 6)) #one row four columns
+boxplot(whi.log.df$GDP.per.Capita ~ whi.log.df$Happiness, ylab = "GDP", xlab ="Happiness")
+boxplot(whi.log.df$Family ~ whi.log.df$Happiness, ylab = "Family", xlab = "Happiness")
+boxplot(whi.log.df$Generosity ~ whi.log.df$Happiness, ylab = "Generosity", xlab = "Happiness")
+boxplot(whi.log.df$Life.Expectancy ~ whi.log.df$Happiness, ylab = "Life Expectancy", xlab = "Happiness")
+boxplot(whi.log.df$Freedom ~ whi.log.df$Happiness, ylab = "Freedom", xlab = "Happiness")
+boxplot(whi.log.df$Government.Corruption ~ whi.log.df$Happiness, ylab = "Government Corruption", xlab = "Happiness")
+# Provides insights into the different between happy and sad coutries.
+```
+
+Partition the data for Logistic Reg: 60% training, 40% validation
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(2)
+train.index <- sample(c(1:dim(whi.log.df)[1]), dim(whi.log.df)[1]*0.6)  
+train.df <- whi.log.df[train.index, ]
+valid.df <- whi.log.df[-train.index, ]
+head(train.df)
+head(valid.df)
+```
+Logistic Full Model
+```{r}
+logit.reg.happiness <- glm(Happiness ~ ., data = train.df, family = "binomial") 
+options(scipen=999)
+summary(logit.reg.happiness)
+```
+
+
+Correlation:
+```{r}
+whi.glm.df <- whi.log.df[, -c(7)]
+head(whi.glm.df)
+round(var(whi.glm.df),2)
+round(cov(whi.glm.df),2)
+round(cor(whi.glm.df),2)
+# Life.Expectancy and GDP has the highest correlation at .78 next is Life and Family at .57
+```
+
+PCA: 
+```{r}
+#PCA analysis:
+pcs <- prcomp((train.df), scale. = T)
+summary(pcs)
+weight <- pcs$rotation[,1:5]
+dim(weight)
+pc.scores <- pcs$x
+training.pca.df <- data.frame(train.df$Happiness, pc.scores)
+pca.train.model1 <- glm(train.df.Happiness~PC1+PC2+PC3+PC4+PC5, data =
+training.pca.df)
+coefficients <- pca.train.model1$coefficients
+coefficients
+head(coefficients)
+valid.scale <- as.data.frame(scale(valid.df))
+dim(valid.scale)
+pcv <- as.matrix(valid.scale) %*% as.matrix(weight)
+head(pcv)
+pcv1 <-cbind(1,pcv)
+head(pcv1)
+pc_hat <- pcv1%*% coefficients
+head(pc_hat)
+```
+
+Exhaustive Search: 
+```{r}
+library(leaps)
+search <- regsubsets(Happiness ~ ., data = train.df, nvmax=dim(whi.glm.df)[2], method = "exhaustive")
+sum <- summary(search)
+sum
+
+
+# Print out the adjusted R square
+sum$adjr2
+which.max(sum$adjr2)
+# The Adjusted R shows that only 5 predictors should be used.
+#Build a logistic model based on these predictors
+
+whi.glm.exhausted <- glm(Happiness ~ GDP.per.Capita + Family + Freedom+ Government.Corruption + Generosity, data = train.df)
+whi.glm.exhausted.pred <- predict(whi.glm.exhausted, newdata = valid.df)
+accuracy(whi.glm.exhausted.pred, valid.df$Happiness)
+```
+
+#Confusion matrix to do full model accuracy and performance of this classifier 
+```{r}
+
+prob2 <- predict(logit.reg.happiness, newdata=valid.df, type="response")
+head(prob2)
+
+cutoff <- 0.5
+estimated_outcome <- ifelse(prob2>cutoff,1,0)
+data.frame(prob2, estimated_outcome, valid.df$Happiness)
+
+library(caret)
+confusionMatrix(as.factor(estimated_outcome), as.factor(valid.df$Happiness), positive='1')
+#Accuracy : 0.8726
+#Sensitivity : 0.7143              
+#Specificity : 0.9604              
+```
+
+Exhaustive Search: 
+```{r}
+library(leaps)
+search <- regsubsets(Happiness ~ ., data = train.df, nvmax=dim(whi.glm.df)[2], method = "exhaustive")
+sum <- summary(search)
+sum
+
+
+# Print out the adjusted R square
+sum$adjr2
+which.max(sum$adjr2)
+# The Adjusted R shows that  6 predictors should be used.
+#Build a logistic model based on these predictors
+
+whi.glm.exhausted <- glm(Happiness ~ GDP.per.Capita + Family + Freedom+ Government.Corruption + Generosity, data = train.df)
+whi.glm.exhausted.pred <- predict(whi.glm.exhausted, newdata = valid.df)
+accuracy(whi.glm.exhausted.pred, valid.df$Happiness)
+```
+Shows only five predictors are needed.
+
+Forward:
+```{r}
+# create model with no predictors
+whi.glm.null <- lm(Happiness~1, data = train.df)
+whi.glm.forward <- step(whi.glm.null, data = train.df, scope = list(lower = whi.glm.null, upper = logit.reg.happiness), direction = "forward")
+summary(whi.glm.forward)  # Which variables were added?
+whi.glm.forward.pred <- predict(whi.glm.forward, newdata = valid.df)
+accuracy(whi.glm.forward.pred,valid.df$Happiness)
+#Interpretation: The forward regression gave the exact same output as the exhaustive regression with the similar MAPE and RMSE values. 
+```
+
+# Logistic Regression based on Exhaustive and Forward regression
+```{r}
+#Logistic Full Model
+logit.reg.for <- glm(Happiness ~ GDP.per.Capita + Freedom + Government.Corruption + 
+    Generosity + Family, data = train.df, family = "binomial") 
+#options(scipen=999)
+summary(logit.reg.for)
+```
+
+# Confusion matrix to do evaluation performance of this classifier
+```{r}
+prob.for <- predict(logit.reg.for, newdata=valid.df, type="response")
+head(prob2)
+
+cutoff <- 0.5
+estimated_outcome <- ifelse(prob.for>cutoff,1,0)
+data.frame(prob.for, estimated_outcome, valid.df$Happiness)
+
+library(caret)
+confusionMatrix(as.factor(estimated_outcome), as.factor(valid.df$Happiness), positive='1')
+#Accuracy : 0.8946
+#Sensitivity : 0.7604              
+#Specificity : 0.9539  
+```
+
+
+
+Backward:
+```{r} 
+whi.glm.backward <- step(logit.reg.happiness, direction = "backward")
+summary(whi.glm.backward) 
+whi.glm.backward.pred <- predict(whi.glm.backward, newdata = valid.df)
+library(forecast)
+accuracy(whi.glm.backward.pred, valid.df$Happiness)
+```
+
+Step-wise:
+```{r}
+# use step() to run stepwise regression.
+whi.glm.step <- step(logit.reg.happiness, data = train.df, direction = "both")
+summary(whi.glm.step)  # Which variables were dropped/added?
+whi.glm.step.pred <- predict(whi.glm.step, newdata = valid.df)
+accuracy(whi.glm.step.pred, valid.df$Happiness)
+#Interpretation: The stepwise regression gave the exact same output as the backward regression with the exact MAPE and RMSE values.
+```
+
+#Logistic Model based on the Stepwise and Backward regression
+```{r}
+#Logistic Model 1
+logit.reg.step <- glm(Happiness ~ GDP.per.Capita + Family + Freedom + Life.Expectancy + 
+    Generosity, data = train.df, family = "binomial") 
+#options(scipen=999)
+summary(logit.reg.step)
+```
+
+
+# Confusion matrix to do evaluation performance of this classifier
+```{r}
+prob <- predict(logit.reg.step, newdata=valid.df, type="response")
+head(prob2)
+
+cutoff <- 0.5
+estimated_outcome <- ifelse(prob>cutoff,1,0)
+data.frame(prob, estimated_outcome, valid.df$Happiness)
+
+library(caret)
+confusionMatrix(as.factor(estimated_outcome), as.factor(valid.df$Happiness), positive='1')
+#Accuracy : 0.8726 
+#Sensitivity : 0.7143              
+#Specificity : 0.0.9604   
+```
+
+
+
